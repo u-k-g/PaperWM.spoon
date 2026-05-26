@@ -200,6 +200,15 @@ function Windows.addWindow(add_window)
         return
     end
 
+    local tab_leader = Windows.PaperWM.state.findTabLeader(add_window, space)
+    if tab_leader then
+        Windows.PaperWM.state.addTabFollower(tab_leader, add_window)
+        Windows.PaperWM.state.uiWatcherCreate(add_window)
+        Windows.PaperWM.logger.df("adding native tab follower: %s (%d) -> %s (%d)",
+            add_window:title(), add_window:id(), tab_leader:title(), tab_leader:id())
+        return space
+    end
+
     -- find where to insert window
     local add_column = 1
 
@@ -248,6 +257,14 @@ end
 ---@param skip_new_window_focus boolean|nil don't focus a nearby window if true
 ---@return Space|nil space that contained removed window
 function Windows.removeWindow(remove_window, skip_new_window_focus)
+    local follower_leader_id = Windows.PaperWM.state.removeTabFollower(remove_window)
+    if follower_leader_id then
+        local leader = Window.get(follower_leader_id)
+        local leader_index = leader and Windows.PaperWM.state.windowIndex(leader)
+        Windows.PaperWM.state.uiWatcherDelete(remove_window:id())
+        return leader_index and leader_index.space or Spaces.windowSpaces(remove_window)[1]
+    end
+
     -- get index of window and remove
     local remove_index = Windows.PaperWM.state.windowIndex(remove_window, true)
     if not remove_index then
@@ -261,15 +278,25 @@ function Windows.removeWindow(remove_window, skip_new_window_focus)
         }) do if Windows.focusWindow(direction, remove_index) then break end end
     end
 
-    -- remove window
-    if remove_window ~= table.remove(
-            Windows.PaperWM.state.windowList(remove_index.space, remove_index.col), remove_index.row)
-    then
-        Windows.PaperWM.logger.ef("removed window %s (%d) doesn't match", remove_window:title(), remove_window:id())
+    local replacement = Windows.PaperWM.state.promoteTabFollower(remove_window)
+    if replacement then
+        Windows.PaperWM.state.windowList(remove_index.space, remove_index.col)[remove_index.row] = replacement
+        Windows.PaperWM.state.uiWatcherDelete(remove_window:id())
+        Windows.PaperWM.state.uiWatcherCreate(replacement)
+        Windows.PaperWM.logger.df("promoted native tab follower: %s (%d)", replacement:title(), replacement:id())
+    else
+        -- remove window
+        if remove_window ~= table.remove(
+                Windows.PaperWM.state.windowList(remove_index.space, remove_index.col), remove_index.row)
+        then
+            Windows.PaperWM.logger.ef("removed window %s (%d) doesn't match", remove_window:title(), remove_window:id())
+        end
+
+        -- remove watcher
+        Windows.PaperWM.state.uiWatcherDelete(remove_window:id())
     end
 
-    -- remove watcher
-    Windows.PaperWM.state.uiWatcherDelete(remove_window:id())
+    Windows.PaperWM.state.removeTabLeader(remove_window)
 
     -- clear window position
     Windows.PaperWM.state.xPositions(remove_index.space)[remove_window:id()] = nil

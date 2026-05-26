@@ -1,4 +1,5 @@
 local Watcher <const> = hs.uielement.watcher
+local Window <const> = hs.window
 
 local State = {}
 State.__index = State
@@ -8,6 +9,8 @@ local window_list = {} -- 3D array of tiles in order of [space][x][y]
 local index_table = {} -- dictionary of {space, x, y} with window id for keys
 local ui_watchers = {} -- dictionary of uielement watchers with window id for keys
 local x_positions = {} -- dictionary of horizontal positions with [space][id] for keys
+local tab_leaders = {} -- dictionary of leader window id with follower window id for keys
+local tab_followers = {} -- dictionary of follower window ids with leader window id for keys
 ---public state
 State.is_floating = {} -- dictionary of boolean with window id for keys
 State.prev_focused_window = nil ---@type Window|nil
@@ -26,6 +29,8 @@ function State.clear()
     index_table = {}
     ui_watchers = {}
     x_positions = {}
+    tab_leaders = {}
+    tab_followers = {}
     State.is_floating = {}
     State.prev_focused_window = nil
     State.pending_window = nil
@@ -99,9 +104,144 @@ end
 ---@param remove boolean|nil Set to true to remove the entry
 ---@return table|nil
 function State.windowIndex(window, remove)
-    local index = index_table[window:id()]
-    if remove then index_table[window:id()] = nil end
+    local id = window:id()
+    local index = index_table[id]
+    if not index and not remove and tab_leaders[id] then
+        index = index_table[tab_leaders[id]]
+    end
+    if remove then index_table[id] = nil end
     return index
+end
+
+---return true if two windows are likely native tabs of the same macOS window
+---@param a Window
+---@param b Window
+---@return boolean
+local function same_tab_group(a, b)
+    local a_app = a:application()
+    local b_app = b:application()
+    if not a_app or not b_app or a_app:bundleID() ~= b_app:bundleID() then
+        return false
+    end
+
+    local af = a:frame()
+    local bf = b:frame()
+    return af.x == bf.x and af.y == bf.y and af.w == bf.w and af.h == bf.h
+end
+
+---return true if native-tab grouping is enabled for a window's app
+---@param window Window
+---@return boolean
+local function native_tabs_enabled(window)
+    local app = window:application()
+    if not app then return false end
+
+    local configured_apps = State.PaperWM.native_tab_apps or {}
+    local name = app:name()
+    local bundle_id = app:bundleID()
+
+    if configured_apps[name] or configured_apps[bundle_id] then return true end
+    for _, app_id in ipairs(configured_apps) do
+        if app_id == name or app_id == bundle_id then return true end
+    end
+
+    return false
+end
+
+---find an existing managed window that should lead a new native-tab follower
+---@param window Window
+---@param space Space
+---@return Window|nil
+function State.findTabLeader(window, space)
+    if not native_tabs_enabled(window) then return end
+
+    for _, rows in ipairs(window_list[space] or {}) do
+        for _, existing in ipairs(rows) do
+            if existing:id() ~= window:id() and same_tab_group(existing, window) then
+                return Window.get(tab_leaders[existing:id()] or existing:id()) or existing
+            end
+        end
+    end
+end
+
+---track a native-tab follower behind an existing managed leader window
+---@param leader Window
+---@param follower Window
+function State.addTabFollower(leader, follower)
+    local leader_id = leader:id()
+    local follower_id = follower:id()
+    tab_leaders[follower_id] = leader_id
+    tab_followers[leader_id] = tab_followers[leader_id] or {}
+
+    for _, id in ipairs(tab_followers[leader_id]) do
+        if id == follower_id then return end
+    end
+
+    table.insert(tab_followers[leader_id], follower_id)
+end
+
+---return tracked native-tab followers for a managed leader window
+---@param window Window
+---@return number[]
+function State.tabFollowers(window)
+    return tab_followers[window:id()] or {}
+end
+
+---forget a native-tab follower; returns the leader id if the window was a follower
+---@param window Window
+---@return number|nil
+function State.removeTabFollower(window)
+    local follower_id = window:id()
+    local leader_id = tab_leaders[follower_id]
+    if not leader_id then return end
+
+    tab_leaders[follower_id] = nil
+    local followers = tab_followers[leader_id]
+    if followers then
+        for index, id in ipairs(followers) do
+            if id == follower_id then
+                table.remove(followers, index)
+                break
+            end
+        end
+        if #followers == 0 then tab_followers[leader_id] = nil end
+    end
+
+    return leader_id
+end
+
+---replace a managed leader with one of its native-tab followers
+---@param leader Window
+---@return Window|nil
+function State.promoteTabFollower(leader)
+    local leader_id = leader:id()
+    local followers = tab_followers[leader_id]
+    if not followers or #followers == 0 then return end
+
+    local replacement_id = table.remove(followers, 1)
+    local replacement = Window.get(replacement_id)
+    if not replacement then return end
+
+    tab_leaders[replacement_id] = nil
+    tab_followers[leader_id] = nil
+    if #followers > 0 then
+        tab_followers[replacement_id] = followers
+        for _, follower_id in ipairs(followers) do
+            tab_leaders[follower_id] = replacement_id
+        end
+    end
+
+    return replacement
+end
+
+---forget all native-tab state for a managed leader
+---@param window Window
+function State.removeTabLeader(window)
+    local leader_id = window:id()
+    for _, follower_id in ipairs(tab_followers[leader_id] or {}) do
+        tab_leaders[follower_id] = nil
+    end
+    tab_followers[leader_id] = nil
 end
 
 ---create and start a UI watcher for a new window

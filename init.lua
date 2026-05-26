@@ -103,11 +103,11 @@ function PaperWM:start()
     -- restore floating windows
     self.floating.restoreFloating()
 
-    -- populate window list, index table, ui_watchers, and set initial layout
-    self.windows.refreshWindows()
-
     -- start event listeners
     self.events.start()
+
+    -- populate window list, index table, ui_watchers, and set initial layout
+    self.windows.refreshWindows()
 
     return self
 end

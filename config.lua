@@ -77,6 +77,10 @@ Config.default_width = nil ---@type number?
 ---default window width by app name or bundle ID
 Config.app_widths = {} ---@type table<string, number>
 
+---apps whose overlapping same-app windows should be treated as native tabs
+---entries may be app names or bundle IDs; empty by default to preserve original behavior
+Config.native_tab_apps = {} ---@type string[]|table<string, boolean>
+
 ---optional hook to allow specific non-maximizable windows to be tiled
 Config.allow_non_maximizable_window = nil ---@type fun(window: Window): boolean
 

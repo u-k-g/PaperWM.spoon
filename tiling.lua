@@ -19,6 +19,19 @@ local function update_virtual_positions(space, windows, x)
     local x_positions = Tiling.PaperWM.state.xPositions(space)
     for _, window in ipairs(windows) do
         x_positions[window:id()] = x
+        for _, follower_id in ipairs(Tiling.PaperWM.state.tabFollowers(window)) do
+            x_positions[follower_id] = x
+        end
+    end
+end
+
+---move native-tab followers to the same frame as their managed leader
+---@param leader Window
+---@param frame Frame
+local function sync_tab_followers(leader, frame)
+    for _, follower_id in ipairs(Tiling.PaperWM.state.tabFollowers(leader)) do
+        local follower = Window.get(follower_id)
+        if follower then Tiling.PaperWM.windows.moveWindow(follower, frame) end
     end
 end
 
@@ -53,6 +66,7 @@ function Tiling.tileColumn(windows, bounds, h, w, id, h4id)
         frame.w = w
         frame.y2 = math.min(frame.y2, bounds.y2) -- don't overflow bottom of bounds
         Tiling.PaperWM.windows.moveWindow(window, frame)
+        sync_tab_followers(window, frame)
         bounds.y = math.min(frame.y2 + bottom_gap, bounds.y2)
         last_window = window
     end
@@ -60,6 +74,7 @@ function Tiling.tileColumn(windows, bounds, h, w, id, h4id)
     if frame.y2 ~= bounds.y2 then
         frame.y2 = bounds.y2
         Tiling.PaperWM.windows.moveWindow(last_window, frame)
+        sync_tab_followers(last_window, frame)
     end
     return w -- return width of column
 end
